@@ -31,4 +31,8 @@ public class FakeDatabase<ID, T extends Identifier<ID>> {
     public void add(T item) {
         items.put(item.getId(), item);
     }
+
+    public T get(ID id) {
+        return items.get(id);
+    }
 }

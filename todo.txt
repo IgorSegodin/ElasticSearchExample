@@ -1,0 +1,4 @@
+TODO search by nested object fields (related objects)
+TODO aggregate by specific field (code)
+TODO add more info for existing entity (search entity by file content after file was added)
+TODO query only specific fields (id etc.)

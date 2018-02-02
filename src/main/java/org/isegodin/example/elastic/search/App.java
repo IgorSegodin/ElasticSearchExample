@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import org.apache.http.HttpHost;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.index.IndexRequest;
@@ -19,9 +20,15 @@ import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.search.sort.FieldSortBuilder;
+import org.elasticsearch.search.sort.ScriptSortBuilder;
+import org.elasticsearch.search.sort.SortBuilders;
+import org.elasticsearch.search.sort.SortOrder;
 import org.isegodin.example.elastic.search.dto.FileDto;
 import org.isegodin.example.elastic.search.dto.Identifier;
 import org.isegodin.example.elastic.search.dto.PropertyDto;
@@ -32,6 +39,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.SneakyThrows;
 
 /**
+ * https://www.elastic.co/guide/index.html
+ *
  * @author i.segodin
  */
 public class App {
@@ -44,6 +53,9 @@ public class App {
     public static final String FILE_INDEX = "file";
 
     public static final ObjectMapper objectMapper = new ObjectMapper();
+    static {
+        objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    }
     public static final Map<String, Class<? extends Identifier>> indexToClassMap = new HashMap<>();
     public static final Map<Class<? extends Identifier>, String> classToIndexMap = new HashMap<>();
     static {
@@ -77,7 +89,15 @@ public class App {
             PropertyDto.builder().id(4L).address1("Heron Tower").address2("110 Bishopsgate").address3("London EC2N 4AY").address4("UK").note("The Heron Tower (officially 110 Bishopsgate) is a commercial skyscraper in London").build()
     ));
 
-    public static final FakeDatabase<Long, TaskDto> taskDatabase = new FakeDatabase<>();
+    public static final FakeDatabase<Long, TaskDto> taskDatabase = new FakeDatabase<>(Arrays.asList(
+            TaskDto.builder().id(1L).code("extinguisher").name("Check extinguisher").property(propertyDatabase.get(1L)).build(),
+            TaskDto.builder().id(2L).code("extinguisher").name("Check extinguisher").property(propertyDatabase.get(2L)).build(),
+            TaskDto.builder().id(3L).code("extinguisher").name("Check extinguisher").property(propertyDatabase.get(3L)).build(),
+            TaskDto.builder().id(4L).code("extinguisher").name("Check extinguisher").property(propertyDatabase.get(4L)).build(),
+            TaskDto.builder().id(5L).code("elswitch").name("Inspect electrical switches").property(propertyDatabase.get(2L)).build(),
+            TaskDto.builder().id(6L).code("elswitch").name("Inspect electrical switches").property(propertyDatabase.get(3L)).build(),
+            TaskDto.builder().id(7L).code("special").name("Special task London").property(propertyDatabase.get(4L)).build()
+    ));
 
     public static final FakeDatabase<String, FileDto> fileDatabase = new FakeDatabase<>(Arrays.asList(
             FileDto.builder().path("/property/1/files/img_01.jpeg").name("img_01.jpeg").size(24L).contentType("image/jpeg").build(),
@@ -86,26 +106,14 @@ public class App {
             FileDto.builder().path("/property/2/files/img_02.jpeg").name("img_02.jpeg").size(55L).contentType("image/jpeg").build()
     ));
 
-    /*
-        index: Collections of documents (“bookstore” is a Document).
-            An Index is similar to Database in Relation Database World.
-
-        type: category of similar Documents. A Type is similar to Table in Relation Database World
-
-        document: A Document is similar to a Row in a Table in Relation Database World.
-            Key is Column name and value is Column value.
-
-     */
-
     public static void main(String[] args) throws IOException {
         try {
-
             createIndexes(userDatabase.listAll());
             createIndexes(propertyDatabase.listAll());
             createIndexes(taskDatabase.listAll());
             createIndexes(fileDatabase.listAll());
 
-            printAll(findBySearchString("java", null, USER_INDEX));
+            printAll(findBySearchString("london", FILE_INDEX, TASK_INDEX, PROPERTY_INDEX, USER_INDEX));
 
             System.out.println();
         } finally {
@@ -144,15 +152,24 @@ public class App {
     @SneakyThrows
     private static List<Identifier> findBySearchString(String searchString, String index, String... otherIndexes) {
         SearchRequest searchRequest = new SearchRequest();
-        searchRequest
-                .indices(toArray(index, otherIndexes))
+        String[] indices = toArray(index, otherIndexes);
+        searchRequest.indices(indices)
                 .types(TYPE);
 
-        searchRequest.source(
-                SearchSourceBuilder.searchSource().query(
-                        QueryBuilders.multiMatchQuery(searchString)
-                )
+        SearchSourceBuilder query = SearchSourceBuilder.searchSource().query(
+//                QueryBuilders.matchAllQuery()
+                QueryBuilders.multiMatchQuery(searchString)
         );
+
+        query.sort(new ScriptSortBuilder(createSortByIndexWeightScript(indices), ScriptSortBuilder.ScriptSortType.NUMBER));
+                //query.sort(new FieldSortBuilder("id"));
+
+        searchRequest.source(
+                query
+        );
+
+//        searchRequest.source().from(0);
+//        searchRequest.source().size(5);
 
         SearchResponse searchResponse = client.search(searchRequest);
         SearchHits hits = searchResponse.getHits();
@@ -182,6 +199,19 @@ public class App {
             }
         }
         return new String[]{first};
+    }
+
+    private static Script createSortByIndexWeightScript(String[] indices) {
+        HashMap<String, Object> sortParams = new HashMap<>();
+
+        Map<String, Integer> indexWeightMap = new HashMap<>();
+        sortParams.put("indexWeightMap", indexWeightMap);
+
+        for (int i = 0; i < indices.length; i++) {
+            indexWeightMap.put(indices[i], i);
+        }
+
+        return new Script(ScriptType.INLINE, "painless", "params.indexWeightMap.get(doc._index.value)", sortParams);
     }
 
 }
